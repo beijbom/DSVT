@@ -8,11 +8,8 @@ import modal
 
 # ### Repository Pointer
 # This demo relies on (slightly) modified version of DSVT.
-dsvt_repository = "https://github.com/ben-modal/DSVT-modal.git"
-branch_name = "modal-train"
-# After that change merged into the main repo, this can point to the regular DSVT.
-# dsvt_repository = https://github.com/beijbom/DSVT.git
-# branch_name = "master"
+dsvt_repository = "https://github.com/beijbom/DSVT.git"
+branch_name = "master"
 # Get the short name of the repo
 dsvt = dsvt_repository.split("/")[-1].split(".")[0]
 
