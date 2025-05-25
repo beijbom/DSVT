@@ -1,4 +1,5 @@
 import _init_path
+import wandb
 import argparse
 import datetime
 import glob
@@ -171,6 +172,9 @@ def main():
     # -----------------------start training---------------------------
     logger.info('**********************Start training %s/%s(%s)**********************'
                 % (cfg.EXP_GROUP_PATH, cfg.TAG, args.extra_tag))
+    
+    wandb.login(key="96ef26e86e1f7cf07e5546dda5a50e78ad102bcf")
+    run = wandb.init(project="DSVT")
 
     train_model(
         model,

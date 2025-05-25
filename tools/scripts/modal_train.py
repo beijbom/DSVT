@@ -53,7 +53,7 @@ nuscenes_image = (
     )
     .apt_install(["git", "python3-opencv", "build-essential", "ninja-build", "clang"])
     .run_commands("pip install --upgrade pip")
-    .pip_install("uv")
+    .pip_install("uv", "wandb")
     .run_commands(
         "uv pip install --system --index-strategy unsafe-best-match "
         "'numpy==1.23.5' 'scikit-image<=0.21.0' "
