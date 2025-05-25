@@ -258,6 +258,7 @@ def download_nuscenes(
 )
 class DSVTTrainer:
     n_gpus: int = modal.parameter(default=0)
+    lr: str = modal.parameter(default="0.005")
 
     @modal.method()
     def default_nuscenes_config_setup(
@@ -338,6 +339,7 @@ class DSVTTrainer:
         ] = [velo_data.as_posix()]
         # Point model config to our new data config
         model_config["DATA_CONFIG"]["_BASE_CONFIG_"] = output_data_path.as_posix()
+        model_config["OPTIMIZATION"]["LR"] = float(self.lr)
 
         with open(output_model_path, "w") as f:
             safe_dump(model_config, f)
@@ -391,7 +393,7 @@ class DSVTTrainer:
 
 
 @app.local_entrypoint()
-def main(gpu: str = "A100", n_gpus: int = 2, data_ver: str = "v1.0-mini"):
+def main(gpu: str = "A100", n_gpus: int = 2, lr: str = "0.005", data_ver: str = "v1.0-mini"):
     # (0) Check for data before firing up the downloader/preprocessor container
     # Check if the necessary pickle files exist:
     pickles = [
@@ -423,7 +425,7 @@ def main(gpu: str = "A100", n_gpus: int = 2, data_ver: str = "v1.0-mini"):
         print("Dataset pickles found, skipping download etc.")
 
     # (1) Data identified! Create the trainer.
-    trainer = DSVTTrainer.with_options(gpu=f"{gpu}:{n_gpus}")(n_gpus=n_gpus)
+    trainer = DSVTTrainer.with_options(gpu=f"{gpu}:{n_gpus}")(n_gpus=n_gpus, lr=lr)
 
     # Replace this with your custom config setup:
     exp_name = "multi-gpu-demo"
