@@ -100,11 +100,9 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
         avg_forward_time = commu_utils.average_reduce_value(cur_forward_time)
         avg_batch_time = commu_utils.average_reduce_value(cur_batch_time)
 
-        # log to console and tensorboard
-        run.log({"loss/train": loss.item(), "learning_rate": cur_lr}, accumulated_iter)
-
-        # log to console and tensorboard
         if rank == 0:
+            # log to console and tensorboard
+            run.log({"loss/train": loss.item(), "learning_rate": cur_lr}, accumulated_iter)
             data_time.update(avg_data_time)
             forward_time.update(avg_forward_time)
             batch_time.update(avg_batch_time)
@@ -186,9 +184,13 @@ def train_model(model, optimizer, train_loader, model_func, lr_scheduler, optim_
                 merge_all_iters_to_one_epoch=False,
                 use_logger_to_record=False, logger=None, logger_iter_interval=None, ckpt_save_time_interval=None, show_gpu_stat=False, fp16=False, cfg=None):
     accumulated_iter = start_iter
-    wandb.login(key="96ef26e86e1f7cf07e5546dda5a50e78ad102bcf")
-    run = wandb.init(project="DSVT")
-    run.config.lr = optim_cfg.LR
+    if rank == 0:
+        wandb.login(key="96ef26e86e1f7cf07e5546dda5a50e78ad102bcf")
+        run = wandb.init(project="DSVT")
+        run.config.lr = optim_cfg.LR
+        run.config.n_gpus = torch.cuda.device_count()
+    else:
+        run = None
     
     
 
