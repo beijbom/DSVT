@@ -3,7 +3,7 @@
 # ## Setup
 
 from pathlib import Path
-
+import itertools
 import modal
 
 # ### Repository Pointer
@@ -29,7 +29,7 @@ vol_name = "example-nuscenes"
 # This is the relative location within the container where this Volume will be mounted:
 vol_mnt = Path("/data")
 vol_data_subdir = "nuscenes"  # data subdir within the volume
-config_cache_subdir = "config-backups"  # you can save whatever you want in there
+CONFIG_CACHE_SUBDIR = "config-backups"  # you can save whatever you want in there
 
 
 # Initialize the the Volume object (creating one if you haven't already):
@@ -50,7 +50,7 @@ nuscenes_image = (
     )
     .apt_install(["git", "python3-opencv", "build-essential", "ninja-build", "clang"])
     .run_commands("pip install --upgrade pip")
-    .pip_install("uv", "wandb")
+    .pip_install("uv")
     .run_commands(
         "uv pip install --system --index-strategy unsafe-best-match "
         "'numpy==1.23.5' 'scikit-image<=0.21.0' "
@@ -82,6 +82,10 @@ nuscenes_image = (
         f"mkdir -p /OpenPCDet/data && ln -s {(vol_mnt / vol_data_subdir).as_posix()} /OpenPCDet/data/nuscenes"
     )
     .entrypoint([])
+    # Add local version of training dir (assumes nothing in here needs to be rebuilt).
+    # This goes last. `remote_path` must be absolute path.
+    .pip_install("wandb")
+    .add_local_dir("/Users/obeijbom/code/DSVT/tools", remote_path=f"/{dsvt}/tools")
 )
 
 # Initialize the app
@@ -89,7 +93,6 @@ app = modal.App(
     "train-nuscenes",
     image=nuscenes_image,
     volumes={vol_mnt: nuscenes_volume},
-    secrets=[modal.Secret.from_name("wandb-secret")]
 )
 
 
@@ -254,14 +257,16 @@ def download_nuscenes(
     image=nuscenes_image,
     volumes={vol_mnt: nuscenes_volume},
     timeout=24 * 60 * 60,
-    max_containers=1,
     cloud="aws",
 )
 class DSVTTrainer:
-    n_gpus: int = modal.parameter(default=0)
-    lr: str = modal.parameter(default="0.005")
+    @modal.enter()
+    def dev_count(self):
+        """Runs once at container startup."""
+        import torch
 
-    @modal.method()
+        self.n_gpus = torch.cuda.device_count()
+
     def default_nuscenes_config_setup(
         self,
         tag: str = "",
@@ -269,6 +274,7 @@ class DSVTTrainer:
         model_name: str = "dsvt_plain_1f_onestage_nusences",
         data_name: str = "nuscenes_dataset",
         config_save_dir="saved-configs",
+        optimization_config: dict = {},
     ):
         """
         This function loads template model/data configs and modifies them to point at the data
@@ -333,6 +339,7 @@ class DSVTTrainer:
         ########################################################
         # (2) Edit model config
 
+        # (2.a) point to the new data config
         with open(template_model_path, "r") as f:
             model_config = safe_load(f)
         model_config["DATA_CONFIG"]["DATA_AUGMENTOR"]["AUG_CONFIG_LIST"][0][
@@ -340,8 +347,10 @@ class DSVTTrainer:
         ] = [velo_data.as_posix()]
         # Point model config to our new data config
         model_config["DATA_CONFIG"]["_BASE_CONFIG_"] = output_data_path.as_posix()
-        model_config["OPTIMIZATION"]["LR"] = float(self.lr)
 
+        # (2.b) update the optimization config
+        for key, param in optimization_config.items():
+            model_config["OPTIMIZATION"][key] = param
         with open(output_model_path, "w") as f:
             safe_dump(model_config, f)
 
@@ -356,21 +365,33 @@ class DSVTTrainer:
     @modal.method()
     def train(
         self,
-        model_config_path: str,
-        exp_name: str = "",
-        params: dict = {},
+        tag_and_config: dict,
+        data_ver: str = "v1.0-mini",
+        cli_flags: dict = {},
+        base_model_config: str = None,
+        base_data_config: str = None,
     ):
         """
         Method that creates a command for executing train.py.
         Inputs:
-            model_config_path: path to a config file (mandatory input to train.py)
-            exp_name: optional tag for printing
             params: dict of flags passed on to train.py
         """
         import os
 
-        # Prepare inputs
-        flags = " ".join([f"--{arg}={val}" for arg, val in params.items()])
+        # Separate inputs
+        tag, opt_config = tag_and_config
+
+        # Create the config for this experiment
+        # NOTE: if you wanted to user different models or data, can pass them here
+        model_config_path = self.default_nuscenes_config_setup(
+            tag=tag,
+            optimization_config=opt_config,
+            data_ver=data_ver,
+            config_save_dir=CONFIG_CACHE_SUBDIR,
+        )
+
+        # Prepare commandline arguments
+        flags = " ".join([f"--{arg}={val}" for arg, val in cli_flags.items()])
         cmd = (
             f"torchrun "
             "--standalone "
@@ -381,8 +402,8 @@ class DSVTTrainer:
             f"/{dsvt}/tools/train.py --launcher pytorch "
             f"--cfg_file {model_config_path} " + flags
         )
-        if exp_name:
-            print(f"Running exp {exp_name} with command:\n\t{cmd}")
+        if tag:
+            print(f"Running exp {tag} with command:\n\t{cmd}")
 
         # Execute
         os.chdir(f"/{dsvt}/tools")
@@ -392,9 +413,8 @@ class DSVTTrainer:
 
         os.system(cmd)
 
-@app.local_entrypoint()
-def main(gpu: str = "A100", n_gpus: int = 2, lr: str = "0.005", data_ver: str = "v1.0-mini"):
-    # (0) Check for data before firing up the downloader/preprocessor container
+
+def setup_data(data_ver):
     # Check if the necessary pickle files exist:
     pickles = [
         "nuscenes_infos_10sweeps_train.pkl",
@@ -424,16 +444,56 @@ def main(gpu: str = "A100", n_gpus: int = 2, lr: str = "0.005", data_ver: str = 
     else:
         print("Dataset pickles found, skipping download etc.")
 
-    # (1) Data identified! Create the trainer.
-    trainer = DSVTTrainer.with_options(gpu=f"{gpu}:{n_gpus}")(n_gpus=n_gpus, lr=lr)
 
-    # Replace this with your custom config setup:
-    exp_name = "multi-gpu-demo"
-    exp_config = trainer.default_nuscenes_config_setup.remote(
-        tag=exp_name,
-        data_ver=data_ver,
-        config_save_dir=config_cache_subdir,
-    )
-    params = {"epochs": 1}
-    # Call train.py (spawns one container)
-    trainer.train.remote(exp_name=exp_name, model_config_path=exp_config, params=params)
+@app.local_entrypoint()
+def main(gpu: str = "A100", n_gpus: int = 2, data_ver: str = "v1.0-mini"):
+    # (0) Check for data before firing up the downloader/preprocessor container
+    setup_data(data_ver=data_ver)
+
+    # (1) Determine experiments.
+    # At current this `default_nuscenes_config_setup` method sets up the BASE
+    # config (data and model) so that they point to each other.
+    # For the parameter sweep we will (in trainer.train):
+    # 1. also dynamically edit the OPTIMIZATION field
+    # 2. save with a custom filename
+    # Here we specify all the training parameters we want to try
+
+    param_lists = {
+        "BATCH_SIZE_PER_GPU": [1, 2],
+        "LR": [0.0001, 0.005],
+        "LR_WARMUP": [True, False],
+    }
+
+    # Keys in a fixed order so the zipping is stable
+    keys = list(param_lists)
+
+    # Cartesian grid over all value lists
+    params_to_sweep = [
+        dict(zip(keys, combination))
+        for combination in itertools.product(*(param_lists[k] for k in keys))
+    ]
+
+    # Tag each experiment EXP0, EXP1, …
+    map_inputs = [(f"EXP{i}", p) for i, p in enumerate(params_to_sweep)]
+
+    print("Experiments:")
+    for experiment in params_to_sweep:
+        print(experiment)
+
+    # Start the app and fire up that many containers
+
+    # (1) Create the trainer app.
+    trainer = DSVTTrainer.with_options(gpu=f"{gpu}:{n_gpus}")()
+
+    # This is a constant input to the trainer.train method:
+    train_kwargs = {
+        "cli_flags": {"epochs": 1},  # these are forwarded to train.py
+        "data_ver": data_ver,  # other kwargs for trainer.train
+    }
+
+    # (3.) Call train.py
+    # for result in trainer.train.map(map_inputs, kwargs=train_kwargs):
+    #     print(f"Got result from training session: {result}")
+    trainer.train.spawn_map(map_inputs, kwargs=train_kwargs)
+
+    # (4.) Use results to e.g. spawn a new experiment, etc...

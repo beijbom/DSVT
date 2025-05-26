@@ -185,8 +185,9 @@ def train_model(model, optimizer, train_loader, model_func, lr_scheduler, optim_
                 use_logger_to_record=False, logger=None, logger_iter_interval=None, ckpt_save_time_interval=None, show_gpu_stat=False, fp16=False, cfg=None):
     accumulated_iter = start_iter
     if rank == 0:
+        wandb.login(key="96ef26e86e1f7cf07e5546dda5a50e78ad102bcf")
         run = wandb.init(project="DSVT")
-        run.config = {**run.config, "lr": optim_cfg.LR, "n_gpus": torch.cuda.device_count()}
+        run.config.update(optim_cfg)
     else:
         run = None
     

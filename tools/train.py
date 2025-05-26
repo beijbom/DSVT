@@ -1,5 +1,3 @@
-import _init_path
-import wandb
 import argparse
 import datetime
 import glob
