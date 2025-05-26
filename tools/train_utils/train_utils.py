@@ -101,7 +101,6 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
 
         # log to console and tensorboard
         wandb.log({"loss/train": loss.item(), "learning_rate": cur_lr}, accumulated_iter)
-        print(f"logging to wandb: {accumulated_iter}")
 
         # log to console and tensorboard
         if rank == 0:
