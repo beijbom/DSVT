@@ -18,10 +18,11 @@ except:
 
 
 
+
 def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, accumulated_iter, optim_cfg,
                     rank, tbar, total_it_each_epoch, dataloader_iter, tb_log=None, leave_pbar=False,
                     use_logger_to_record=False, logger=None, logger_iter_interval=50, cur_epoch=None,
-                    total_epochs=None, ckpt_save_dir=None, ckpt_save_time_interval=300, show_gpu_stat=False, fp16=False):
+                    total_epochs=None, ckpt_save_dir=None, ckpt_save_time_interval=300, show_gpu_stat=False, fp16=False, run=None):
     if total_it_each_epoch == len(train_loader):
         dataloader_iter = iter(train_loader)
 
@@ -100,7 +101,7 @@ def train_one_epoch(model, optimizer, train_loader, model_func, lr_scheduler, ac
         avg_batch_time = commu_utils.average_reduce_value(cur_batch_time)
 
         # log to console and tensorboard
-        wandb.log({"loss/train": loss.item(), "learning_rate": cur_lr}, accumulated_iter)
+        run.log({"loss/train": loss.item(), "learning_rate": cur_lr}, accumulated_iter)
 
         # log to console and tensorboard
         if rank == 0:
@@ -185,6 +186,11 @@ def train_model(model, optimizer, train_loader, model_func, lr_scheduler, optim_
                 merge_all_iters_to_one_epoch=False,
                 use_logger_to_record=False, logger=None, logger_iter_interval=None, ckpt_save_time_interval=None, show_gpu_stat=False, fp16=False, cfg=None):
     accumulated_iter = start_iter
+    wandb.login(key="96ef26e86e1f7cf07e5546dda5a50e78ad102bcf")
+    run = wandb.init(project="DSVT")
+    run.config.lr = optim_cfg.LR
+    
+    
 
     augment_disable_flag = False
     with tqdm.trange(start_epoch, total_epochs, desc='epochs', dynamic_ncols=True, leave=(rank == 0)) as tbar:
@@ -239,7 +245,8 @@ def train_model(model, optimizer, train_loader, model_func, lr_scheduler, optim_
                 logger=logger, logger_iter_interval=logger_iter_interval,
                 ckpt_save_dir=ckpt_save_dir, ckpt_save_time_interval=ckpt_save_time_interval,
                 show_gpu_stat=show_gpu_stat,
-                fp16=fp16
+                fp16=fp16,
+                run=run
             )
 
             # save trained model
