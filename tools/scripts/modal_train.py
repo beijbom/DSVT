@@ -89,6 +89,7 @@ app = modal.App(
     "train-nuscenes",
     image=nuscenes_image,
     volumes={vol_mnt: nuscenes_volume},
+    secrets=[modal.Secret.from_name("wandb-secret")]
 )
 
 
@@ -390,7 +391,6 @@ class DSVTTrainer:
         )
 
         os.system(cmd)
-
 
 @app.local_entrypoint()
 def main(gpu: str = "A100", n_gpus: int = 2, lr: str = "0.005", data_ver: str = "v1.0-mini"):
