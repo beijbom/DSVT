@@ -200,7 +200,6 @@ def main():
         fp16=args.fp16,
         cfg=cfg
     )
-    run.finish()
 
     if hasattr(train_set, 'use_shared_memory') and train_set.use_shared_memory:
         train_set.clean_shared_memory()
