@@ -5,6 +5,7 @@
 from pathlib import Path
 import itertools
 import modal
+import modal.experimental
 
 # ### Repository Pointer
 # This demo relies on (slightly) modified version of DSVT.
@@ -39,11 +40,11 @@ nuscenes_volume = modal.Volume.from_name(vol_name, create_if_missing=True)
 # Here we build all the necessary libraries to run DSVT and OpenPCDet.
 # It's somewhat nuanced, with specialized versions of numpy etc., so beware of fiddling.
 nuscenes_image = (
-    modal.Image.from_registry("nvidia/cuda:11.8.0-devel-ubuntu20.04", add_python="3.9")
+    modal.Image.from_registry("nvidia/cuda:12.6.0-devel-ubuntu22.04", add_python="3.11")
     .env(
         {  # Some environment variable needed to compile the libs in the image
             "DEBIAN_FRONTEND": "noninteractive",
-            "TORCH_CUDA_ARCH_LIST": "8.0;8.6",
+            "TORCH_CUDA_ARCH_LIST": "8.0;8.6;9.0",
             "CXX": "g++",
             "CC": "gcc",
         }
@@ -55,13 +56,13 @@ nuscenes_image = (
         "uv pip install --system --index-strategy unsafe-best-match "
         "'numpy==1.23.5' 'scikit-image<=0.21.0' "
         # Doesn't have to be this version of Torch, but need to commit to a version and stay consistent.
-        "'torch==2.0.1+cu118' 'torchvision==0.15.2+cu118' 'torchaudio==2.0.2+cu118' "
-        "--index-url https://download.pytorch.org/whl/cu118 "
+        "'torch==2.6.0' 'torchvision==0.15.2' 'torchaudio==2.0.2' "
+        "--index-url https://download.pytorch.org/whl/cu126 "
         "--extra-index-url https://pypi.org/simple"
     )
     .run_commands(
-        "uv pip install --system --no-build-isolation spconv-cu118 torch-scatter "
-        "-f https://data.pyg.org/whl/torch-2.0.1+cu118.html"
+        "uv pip install --system --no-build-isolation spconv-cu126 torch-scatter "
+        "-f https://data.pyg.org/whl/torch-2.6.0+cu126.html"
     )
     .run_commands(
         "uv pip install --system tensorrt onnx pyyaml 'nuscenes-devkit==1.0.5'"
@@ -70,6 +71,7 @@ nuscenes_image = (
     # version of the repo using Modal's `add_local_dir`:
     # https://modal.com/docs/guide/images#add-local-files-with-add_local_dir-and-add_local_file
     #
+    .pip_install("setuptools", "wheel")
     .run_commands(f"git clone -b {branch_name} --single-branch {dsvt_repository}")
     .run_commands(f"uv pip install --system --no-build-isolation -e {dsvt}")
     .run_commands("uv pip install --system 'mmcv>=1.4.0,<2.0.0'")
@@ -85,6 +87,7 @@ nuscenes_image = (
     # Add local version of training dir (assumes nothing in here needs to be rebuilt).
     # This goes last. `remote_path` must be absolute path.
     .pip_install("wandb")
+    .apt_install("git", "libibverbs-dev", "libibverbs1")
     .add_local_dir("/Users/obeijbom/code/DSVT/tools", remote_path=f"/{dsvt}/tools")
 )
 
@@ -257,7 +260,12 @@ def download_nuscenes(
     image=nuscenes_image,
     volumes={vol_mnt: nuscenes_volume},
     timeout=24 * 60 * 60,
-    cloud="aws",
+    cloud="OCI",
+    gpu="H100:8"
+)
+@modal.experimental.clustered(
+    size=2,
+    rdma=True,
 )
 class DSVTTrainer:
     @modal.enter()
@@ -390,15 +398,20 @@ class DSVTTrainer:
             config_save_dir=CONFIG_CACHE_SUBDIR,
         )
 
+        cluster_info = modal.experimental.get_cluster_info()
+        main_ip_addr = cluster_info.container_ips[0]
+
         # Prepare commandline arguments
         flags = " ".join([f"--{arg}={val}" for arg, val in cli_flags.items()])
         cmd = (
             f"torchrun "
-            "--standalone "
-            "--nnodes=1 "
-            "--rdzv-backend=c10d "
-            "--rdzv-endpoint=localhost:0 "
+            "--nnodes=2 "
+            # "--rdzv-backend=c10d "
+            # f"--rdzv-endpoint={main_ip_addr}:29500 "
             f"--nproc_per_node={self.n_gpus} "  # one process per GPU
+            f"--node-rank={cluster_info.rank} "
+            f"--master_addr={main_ip_addr} "
+            f"--master_port=1234 "
             f"/{dsvt}/tools/train.py --launcher pytorch "
             f"--cfg_file {model_config_path} " + flags
         )
@@ -446,7 +459,7 @@ def setup_data(data_ver):
 
 
 @app.local_entrypoint()
-def main(gpu: str = "A100", n_gpus: int = 2, data_ver: str = "v1.0-mini"):
+def main(gpu: str = "H100", n_gpus: int = 2, data_ver: str = "v1.0-mini"):
     # (0) Check for data before firing up the downloader/preprocessor container
     setup_data(data_ver=data_ver)
 
