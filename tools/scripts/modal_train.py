@@ -39,7 +39,7 @@ nuscenes_volume = modal.Volume.from_name(vol_name, create_if_missing=True)
 # Here we build all the necessary libraries to run DSVT and OpenPCDet.
 # It's somewhat nuanced, with specialized versions of numpy etc., so beware of fiddling.
 nuscenes_image = (
-    modal.Image.from_registry("nvidia/cuda:11.8.0-devel-ubuntu20.04", add_python="3.9")
+    modal.Image.from_registry("nvidia/cuda:11.8.0-devel-ubuntu20.04", add_python="3.11")
     .env(
         {  # Some environment variable needed to compile the libs in the image
             "DEBIAN_FRONTEND": "noninteractive",
@@ -51,6 +51,7 @@ nuscenes_image = (
     .apt_install(["git", "python3-opencv", "build-essential", "ninja-build", "clang"])
     .run_commands("pip install --upgrade pip")
     .pip_install("uv")
+    .pip_install("wheel")
     .run_commands(
         "uv pip install --system --index-strategy unsafe-best-match "
         "'numpy==1.23.5' 'scikit-image<=0.21.0' "
